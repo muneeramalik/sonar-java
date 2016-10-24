@@ -19,15 +19,15 @@
  */
 package org.sonar.java;
 
+import java.io.File;
 import org.junit.Before;
 import org.junit.Test;
 import org.mockito.Mockito;
 import org.sonar.api.batch.fs.InputFile;
 import org.sonar.api.batch.fs.internal.DefaultFileSystem;
 import org.sonar.api.batch.fs.internal.DefaultInputFile;
+import org.sonar.api.config.MapSettings;
 import org.sonar.api.config.Settings;
-
-import java.io.File;
 
 import static org.fest.assertions.Assertions.assertThat;
 import static org.junit.Assert.fail;
@@ -45,7 +45,7 @@ public class JavaTestClasspathTest {
     inputFile.setLanguage("java");
     inputFile.setType(InputFile.Type.TEST);
     fs.add(inputFile);
-    settings = new Settings();
+    settings = new MapSettings();
   }
 
   /**
@@ -90,15 +90,13 @@ public class JavaTestClasspathTest {
       javaTestClasspath = createJavaClasspath();
       javaTestClasspath.getElements();
       fail("Exception should have been raised");
-    }catch (IllegalStateException ise) {
+    } catch (IllegalStateException ise) {
       assertThat(ise.getMessage()).isEqualTo(message);
     }
   }
 
-
   private JavaTestClasspath createJavaClasspath() {
     return new JavaTestClasspath(settings, fs);
   }
-
 
 }

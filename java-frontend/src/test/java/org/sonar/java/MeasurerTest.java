@@ -20,6 +20,9 @@
 package org.sonar.java;
 
 import com.google.common.collect.Lists;
+import java.io.File;
+import java.nio.charset.StandardCharsets;
+import java.util.Collections;
 import org.junit.Before;
 import org.junit.Test;
 import org.sonar.api.batch.fs.internal.DefaultFileSystem;
@@ -28,10 +31,6 @@ import org.sonar.api.batch.sensor.internal.SensorContextTester;
 import org.sonar.api.issue.NoSonarFilter;
 import org.sonar.api.utils.PathUtils;
 import org.sonar.squidbridge.api.CodeVisitor;
-
-import java.io.File;
-import java.nio.charset.StandardCharsets;
-import java.util.Collections;
 
 import static org.fest.assertions.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
@@ -86,6 +85,10 @@ public class MeasurerTest {
   @Test
   public void verify_complexity_metric() {
     checkMetric("Complexity.java", "complexity", 15);
+  }
+
+  @Test
+  public void verify_complexity_in_classes_metric() {
     checkMetric("Complexity.java", "complexity_in_classes", 15);
   }
 
@@ -123,8 +126,8 @@ public class MeasurerTest {
     JavaConfiguration conf = new JavaConfiguration(StandardCharsets.UTF_8);
     squid = new JavaSquid(conf, null, measurer, null, null, new CodeVisitor[0]);
     squid.scan(Lists.newArrayList(new File(baseDir, filename)), Collections.<File>emptyList());
-    assertThat(context.measures("projectKey:"+relativePath)).hasSize(NB_OF_METRICS);
-    assertThat(context.measure("projectKey:"+relativePath, metric).value()).isEqualTo(expectedValue);
+    assertThat(context.measures("projectKey:" + relativePath)).hasSize(NB_OF_METRICS);
+    assertThat(context.measure("projectKey:" + relativePath, metric).value()).isEqualTo(expectedValue);
   }
 
 }

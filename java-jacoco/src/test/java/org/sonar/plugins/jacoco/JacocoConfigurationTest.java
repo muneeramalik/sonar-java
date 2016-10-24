@@ -19,13 +19,13 @@
  */
 package org.sonar.plugins.jacoco;
 
+import java.io.File;
 import org.junit.Before;
 import org.junit.Test;
 import org.sonar.api.batch.fs.internal.DefaultFileSystem;
+import org.sonar.api.config.MapSettings;
 import org.sonar.api.config.PropertyDefinitions;
 import org.sonar.api.config.Settings;
-
-import java.io.File;
 
 import static org.fest.assertions.Assertions.assertThat;
 
@@ -37,8 +37,8 @@ public class JacocoConfigurationTest {
 
   @Before
   public void setUp() {
-    settings = new Settings(new PropertyDefinitions().addComponents(JacocoConfiguration.getPropertyDefinitions()));
-    fileSystem = new DefaultFileSystem((File)null);
+    settings = new MapSettings(new PropertyDefinitions().addComponents(JacocoConfiguration.getPropertyDefinitions()));
+    fileSystem = new DefaultFileSystem((File) null);
     jacocoConfiguration = new JacocoConfiguration(settings);
   }
 

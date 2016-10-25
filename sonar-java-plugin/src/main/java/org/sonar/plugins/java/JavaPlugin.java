@@ -43,7 +43,7 @@ public class JavaPlugin implements Plugin {
   public void define(Context context) {
     ImmutableList.Builder<Object> builder = ImmutableList.builder();
     builder.addAll(SurefireExtensions.getExtensions());
-    builder.addAll(JaCoCoExtensions.getExtensions());
+    builder.addAll(JaCoCoExtensions.getExtensions(context.getSonarQubeVersion()));
     builder.addAll(JavaClasspathProperties.getProperties());
     builder.add(
       JavaClasspath.class,

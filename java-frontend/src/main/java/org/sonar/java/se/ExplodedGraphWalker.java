@@ -646,12 +646,12 @@ public class ExplodedGraphWalker {
     }
 
     programState = unstack.state;
+    programState = programState.stackValue(value);
     if (variable.is(Tree.Kind.IDENTIFIER)) {
       // only local variables or fields are added to table of values
       // FIXME SONARJAVA-1776 fields accessing using "this." should be handled
       programState = programState.put(((IdentifierTree) variable).symbol(), value);
     }
-    programState = programState.stackValue(value);
   }
 
   private void executeLogicalAssignement(AssignmentExpressionTree tree) {
@@ -663,8 +663,8 @@ public class ExplodedGraphWalker {
       programState = unstack.state;
       SymbolicValue symbolicValue = constraintManager.createSymbolicValue(tree);
       symbolicValue.computedFrom(ImmutableList.of(assignedTo, value));
-      programState = programState.put(((IdentifierTree) variable).symbol(), symbolicValue);
       programState = programState.stackValue(symbolicValue);
+      programState = programState.put(((IdentifierTree) variable).symbol(), symbolicValue);
     }
   }
 
@@ -729,14 +729,14 @@ public class ExplodedGraphWalker {
     programState = unstackUnary.state;
     SymbolicValue unarySymbolicValue = constraintManager.createSymbolicValue(tree);
     unarySymbolicValue.computedFrom(unstackUnary.values);
-    if (tree.is(Tree.Kind.POSTFIX_DECREMENT, Tree.Kind.POSTFIX_INCREMENT, Tree.Kind.PREFIX_DECREMENT, Tree.Kind.PREFIX_INCREMENT)
-      && ((UnaryExpressionTree) tree).expression().is(Tree.Kind.IDENTIFIER)) {
-      programState = programState.put(((IdentifierTree) ((UnaryExpressionTree) tree).expression()).symbol(), unarySymbolicValue);
-    }
     if (tree.is(Tree.Kind.POSTFIX_DECREMENT, Tree.Kind.POSTFIX_INCREMENT)) {
       programState = programState.stackValue(unstackUnary.values.get(0));
     } else {
       programState = programState.stackValue(unarySymbolicValue);
+    }
+    if (tree.is(Tree.Kind.POSTFIX_DECREMENT, Tree.Kind.POSTFIX_INCREMENT, Tree.Kind.PREFIX_DECREMENT, Tree.Kind.PREFIX_INCREMENT)
+      && ((UnaryExpressionTree) tree).expression().is(Tree.Kind.IDENTIFIER)) {
+      programState = programState.put(((IdentifierTree) ((UnaryExpressionTree) tree).expression()).symbol(), unarySymbolicValue);
     }
   }
 
@@ -745,10 +745,13 @@ public class ExplodedGraphWalker {
     SymbolicValue value = programState.getValue(symbol);
     if (value == null) {
       value = constraintManager.createSymbolicValue(tree);
-      programState = programState.put(symbol, value);
+      programState = programState.stackValue(value);
       learnIdentifierNullConstraints(tree, value);
+      programState = programState.put(symbol, value);
+    } else {
+      programState = programState.stackValue(value);
+      programState = programState.put(symbol, value);
     }
-    programState = programState.stackValue(value);
   }
 
   private void learnIdentifierNullConstraints(IdentifierTree tree, SymbolicValue sv) {
@@ -838,7 +841,9 @@ public class ExplodedGraphWalker {
       return;
     }
     checkExplodedGraphTooBig(programState);
-    ExplodedGraph.Node cachedNode = explodedGraph.getNode(programPoint, programState.visitedPoint(programPoint, nbOfExecution + 1));
+    ProgramState ps = programState.visitedPoint(programPoint, nbOfExecution + 1);
+    ps.lastEvaluated = programState.getLastEvaluated();
+    ExplodedGraph.Node cachedNode = explodedGraph.getNode(programPoint, ps);
     if (!cachedNode.isNew && exitPath == cachedNode.exitPath) {
       // has been enqueued earlier
       return;

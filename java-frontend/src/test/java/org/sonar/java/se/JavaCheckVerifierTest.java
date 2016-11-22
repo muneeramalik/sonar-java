@@ -29,6 +29,7 @@ import org.sonar.java.AnalyzerMessage;
 import org.sonar.java.model.InternalSyntaxToken;
 import org.sonar.java.model.statement.ReturnStatementTreeImpl;
 import org.sonar.plugins.java.api.IssuableSubscriptionVisitor;
+import org.sonar.plugins.java.api.JavaCheck;
 import org.sonar.plugins.java.api.JavaFileScannerContext;
 import org.sonar.plugins.java.api.tree.SyntaxTrivia;
 import org.sonar.plugins.java.api.tree.Tree;
@@ -38,8 +39,11 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.function.Function;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
+import static java.util.stream.Collectors.toList;
 import static org.fest.assertions.Assertions.assertThat;
 
 public class JavaCheckVerifierTest {
@@ -235,6 +239,74 @@ public class JavaCheckVerifierTest {
     }
   }
 
+  @Test
+  public void verify_flows() {
+    FakeVisitor fakeVisitor = new FakeVisitor();
+    AnalyzerMessageFactory amf = new AnalyzerMessageFactory(fakeVisitor);
+    AnalyzerMessage issue = amf.message(11, "NullPointerException might be thrown as 'b' is nullable here", 5, 15);
+    List<AnalyzerMessage> npe1Flow = ImmutableList.of(
+      amf.message(9, "a is assigned to b here", 7, 12),
+      amf.message(3, "a is assigned null here", 12, 20));
+    issue.flows.add(npe1Flow);
+    List<AnalyzerMessage> npe2Flow = ImmutableList.of(
+      amf.message(7, "b is assigned to null here", 7, 15));
+    issue.flows.add(npe2Flow);
+    fakeVisitor = fakeVisitor.withPreciseIssue(issue);
+    JavaCheckVerifier.verify("src/test/files/JavaCheckVerifierFlows.java", fakeVisitor);
+  }
+
+  @Test
+  public void verify_unexpected_flows() {
+    FakeVisitor fakeVisitor = new FakeVisitor();
+    AnalyzerMessageFactory amf = new AnalyzerMessageFactory(fakeVisitor);
+    AnalyzerMessage issue = amf.message(11, "NullPointerException might be thrown as 'b' is nullable here", 5, 15);
+    List<AnalyzerMessage> npe1Flow = ImmutableList.of(
+      amf.message(5, "a is assigned to b here", 7, 12),
+      amf.message(6, "a is assigned null here", 12, 20));
+    issue.flows.add(npe1Flow);
+    List<AnalyzerMessage> npe2Flow = ImmutableList.of(
+      amf.message(7, "b is assigned to null here", 7, 15));
+    issue.flows.add(npe2Flow);
+    fakeVisitor = fakeVisitor.withPreciseIssue(issue);
+    try {
+      JavaCheckVerifier.verify("src/test/files/JavaCheckVerifierFlows.java", fakeVisitor);
+    } catch (AssertionError e) {
+      assertThat(e).hasMessage("Unexpected flows: [5,6]. Missing flows: npe1.");
+    }
+  }
+
+  @Test
+  public void verify_missing_flows() {
+    FakeVisitor fakeVisitor = new FakeVisitor();
+    AnalyzerMessageFactory amf = new AnalyzerMessageFactory(fakeVisitor);
+    AnalyzerMessage issue = amf.message(11, "NullPointerException might be thrown as 'b' is nullable here", 5, 15);
+    List<AnalyzerMessage> npe2Flow = ImmutableList.of(
+      amf.message(7, "b is assigned to null here", 7, 15));
+    issue.flows.add(npe2Flow);
+    fakeVisitor = fakeVisitor.withPreciseIssue(issue);
+    try {
+      JavaCheckVerifier.verify("src/test/files/JavaCheckVerifierFlows.java", fakeVisitor);
+    } catch (AssertionError e) {
+      assertThat(e).hasMessage("Missing flows: npe1.");
+    }
+  }
+
+  static class AnalyzerMessageFactory {
+    private static final File FILE = new File("file");
+    private final JavaCheck javaCheck;
+
+    AnalyzerMessageFactory(JavaCheck javaCheck) {
+      this.javaCheck = javaCheck;
+    }
+
+    AnalyzerMessage message(int line, String msg, int sc, int ec) {
+      return new AnalyzerMessage(javaCheck,
+        FILE,
+        new AnalyzerMessage.TextSpan(line, sc, line, ec),
+        msg, 0);
+    }
+  }
+
   private static class FakeVisitor extends IssuableSubscriptionVisitor {
 
     Multimap<Integer, String> issues = LinkedListMultimap.create();
@@ -296,16 +368,24 @@ public class JavaCheckVerifierTest {
         Integer cost = messageCost != null ? messageCost.intValue() : null;
         List<JavaFileScannerContext.Location> secLocations = new ArrayList<>();
         if(!analyzerMessage.flows.isEmpty()) {
-          secLocations  = analyzerMessage.flows.stream().map(l -> l.get(0)).map(secondaryLocation -> new JavaFileScannerContext.Location("", mockTree(secondaryLocation))).collect(Collectors.toList());
+          List<List<JavaFileScannerContext.Location>> flows = analyzerMessage.flows.stream()
+            .map(FakeVisitor::messagesToLocations)
+            .collect(toList());
+          context.reportIssueWithFlow(this, mockTree(analyzerMessage), analyzerMessage.getMessage(), flows,  null);
+        } else {
+          reportIssue(mockTree(analyzerMessage), analyzerMessage.getMessage(), secLocations, cost);
         }
-        reportIssue(mockTree(analyzerMessage), analyzerMessage.getMessage(), secLocations, cost);
       }
       for (String message : issuesOnFile) {
         addIssueOnFile(message);
       }
     }
 
-    private Tree mockTree(final AnalyzerMessage analyzerMessage) {
+    private static List<JavaFileScannerContext.Location> messagesToLocations(List<AnalyzerMessage> flow) {
+      return flow.stream().map(m -> new JavaFileScannerContext.Location(m.getMessage(), mockTree(m))).collect(toList());
+    }
+
+    private static Tree mockTree(final AnalyzerMessage analyzerMessage) {
       AnalyzerMessage.TextSpan textSpan = analyzerMessage.primaryLocation();
       return new ReturnStatementTreeImpl(
         new InternalSyntaxToken(textSpan.startLine, textSpan.startCharacter - 1, "", Lists.<SyntaxTrivia>newArrayList(), 0, 0, false),

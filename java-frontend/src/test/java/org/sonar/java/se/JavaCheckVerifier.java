@@ -22,39 +22,43 @@ package org.sonar.java.se;
 import com.google.common.annotations.Beta;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Splitter;
-import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.HashMultiset;
-import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Multimap;
 import com.google.common.collect.Multiset;
+import com.google.common.collect.Sets;
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.lang.StringUtils;
 import org.fest.assertions.Fail;
 import org.sonar.java.AnalyzerMessage;
 import org.sonar.java.ast.JavaAstScanner;
-import org.sonar.java.ast.visitors.SubscriptionVisitor;
 import org.sonar.java.model.VisitorsBridgeForTests;
 import org.sonar.plugins.java.api.JavaFileScanner;
-import org.sonar.plugins.java.api.tree.SyntaxTrivia;
-import org.sonar.plugins.java.api.tree.Tree;
 
 import java.io.File;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.EnumMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import static java.util.stream.Collectors.joining;
+import static java.util.stream.Collectors.partitioningBy;
 import static org.fest.assertions.Assertions.assertThat;
-
+import static org.fest.assertions.Fail.fail;
+import static org.sonar.java.se.Expectations.IssueAttribute.EFFORT_TO_FIX;
+import static org.sonar.java.se.Expectations.IssueAttribute.END_COLUMN;
+import static org.sonar.java.se.Expectations.IssueAttribute.END_LINE;
+import static org.sonar.java.se.Expectations.IssueAttribute.FLOWS;
+import static org.sonar.java.se.Expectations.IssueAttribute.MESSAGE;
+import static org.sonar.java.se.Expectations.IssueAttribute.SECONDARY_LOCATIONS;
+import static org.sonar.java.se.Expectations.IssueAttribute.START_COLUMN;
 
 /**
  * It is possible to specify the absolute line number on which the issue should appear by appending {@literal "@<line>"} to "Noncompliant".
@@ -78,42 +82,27 @@ import static org.fest.assertions.Assertions.assertThat;
  * </ul>
  */
 @Beta
-public class JavaCheckVerifier extends SubscriptionVisitor {
+public class JavaCheckVerifier {
 
   /**
    * Default location of the jars/zips to be taken into account when performing the analysis.
    */
   private static final String DEFAULT_TEST_JARS_DIRECTORY = "target/test-jars";
-  private static final String TRIGGER = "// Noncompliant";
-  private final ArrayListMultimap<Integer, Map<IssueAttribute, String>> expected = ArrayListMultimap.create();
-  private String testJarsDirectory;
-  private boolean expectNoIssues = false;
-  private String expectFileIssue;
-  private Integer expectFileIssueOnline;
-
-  private static final Map<String, IssueAttribute> ATTRIBUTE_MAP = ImmutableMap.<String, IssueAttribute>builder()
-    .put("message", IssueAttribute.MESSAGE)
-    .put("effortToFix", IssueAttribute.EFFORT_TO_FIX)
-    .put("sc", IssueAttribute.START_COLUMN)
-    .put("startColumn", IssueAttribute.START_COLUMN)
-    .put("el", IssueAttribute.END_LINE)
-    .put("endLine", IssueAttribute.END_LINE)
-    .put("ec", IssueAttribute.END_COLUMN)
-    .put("endColumn", IssueAttribute.END_COLUMN)
-    .put("secondary", IssueAttribute.SECONDARY_LOCATIONS)
-    .build();
-
-  enum IssueAttribute {
-    MESSAGE,
-    START_COLUMN,
-    END_COLUMN,
-    END_LINE,
-    EFFORT_TO_FIX,
-    SECONDARY_LOCATIONS
-  }
+  private final String testJarsDirectory;
+  private final Expectations expectations;
 
   private JavaCheckVerifier() {
     this.testJarsDirectory = DEFAULT_TEST_JARS_DIRECTORY;
+    this.expectations = new Expectations();
+  }
+
+  public JavaCheckVerifier(Expectations expectations) {
+    this(DEFAULT_TEST_JARS_DIRECTORY, expectations);
+  }
+
+  public JavaCheckVerifier(String testJarsDirectory, Expectations expectations) {
+    this.testJarsDirectory = testJarsDirectory;
+    this.expectations = expectations;
   }
 
   /**
@@ -129,7 +118,7 @@ public class JavaCheckVerifier extends SubscriptionVisitor {
    * @param check The check to be used for the analysis
    */
   public static void verify(String filename, JavaFileScanner... check) {
-    scanFile(filename, check, new JavaCheckVerifier());
+    new JavaCheckVerifier().scanFile(filename, check);
   }
 
   /**
@@ -141,7 +130,7 @@ public class JavaCheckVerifier extends SubscriptionVisitor {
    * @param classpath The files to be used as classpath
    */
   public static void verify(String filename, JavaFileScanner check, Collection<File> classpath) {
-    scanFile(filename, new JavaFileScanner[] {check}, new JavaCheckVerifier(), classpath);
+    new JavaCheckVerifier().scanFile(filename, new JavaFileScanner[] {check}, classpath);
   }
 
   /**
@@ -153,9 +142,8 @@ public class JavaCheckVerifier extends SubscriptionVisitor {
    * @param testJarsDirectory The directory containing jars and/or zip defining the classpath to be used
    */
   public static void verify(String filename, JavaFileScanner check, String testJarsDirectory) {
-    JavaCheckVerifier javaCheckVerifier = new JavaCheckVerifier();
-    javaCheckVerifier.testJarsDirectory = testJarsDirectory;
-    scanFile(filename, new JavaFileScanner[] {check}, javaCheckVerifier);
+    JavaCheckVerifier javaCheckVerifier = new JavaCheckVerifier(testJarsDirectory, new Expectations());
+    javaCheckVerifier.scanFile(filename, new JavaFileScanner[] {check});
   }
 
   /**
@@ -165,9 +153,8 @@ public class JavaCheckVerifier extends SubscriptionVisitor {
    * @param check The check to be used for the analysis
    */
   public static void verifyNoIssue(String filename, JavaFileScanner check) {
-    JavaCheckVerifier javaCheckVerifier = new JavaCheckVerifier();
-    javaCheckVerifier.expectNoIssues = true;
-    scanFile(filename, new JavaFileScanner[] {check}, javaCheckVerifier);
+    JavaCheckVerifier javaCheckVerifier = new JavaCheckVerifier(new Expectations(true, null, null));
+    javaCheckVerifier.scanFile(filename, new JavaFileScanner[] {check});
   }
 
   /**
@@ -178,171 +165,129 @@ public class JavaCheckVerifier extends SubscriptionVisitor {
    * @param check The check to be used for the analysis
    */
   public static void verifyIssueOnFile(String filename, String message, JavaFileScanner check) {
-    JavaCheckVerifier javaCheckVerifier = new JavaCheckVerifier();
-    javaCheckVerifier.expectFileIssue = message;
-    javaCheckVerifier.expectFileIssueOnline = null;
-    scanFile(filename, new JavaFileScanner[] {check}, javaCheckVerifier);
+    JavaCheckVerifier javaCheckVerifier = new JavaCheckVerifier(new Expectations(false, message, null));
+    javaCheckVerifier.scanFile(filename, new JavaFileScanner[] {check});
   }
 
-  private static void scanFile(String filename, JavaFileScanner[] checks, JavaCheckVerifier javaCheckVerifier) {
+  private void scanFile(String filename, JavaFileScanner[] checks) {
     Collection<File> classpath = Lists.newLinkedList();
-    File testJars = new File(javaCheckVerifier.testJarsDirectory);
+    File testJars = new File(testJarsDirectory);
     if (testJars.exists()) {
-      classpath = FileUtils.listFiles(testJars, new String[]{"jar", "zip"}, true);
-    } else if (!DEFAULT_TEST_JARS_DIRECTORY.equals(javaCheckVerifier.testJarsDirectory)) {
-      Fail.fail("The directory to be used to extend class path does not exists (" + testJars.getAbsolutePath() + ").");
+      classpath = FileUtils.listFiles(testJars, new String[] {"jar", "zip"}, true);
+    } else if (!DEFAULT_TEST_JARS_DIRECTORY.equals(testJarsDirectory)) {
+      fail("The directory to be used to extend class path does not exists (" + testJars.getAbsolutePath() + ").");
     }
     classpath.add(new File("target/test-classes"));
-    scanFile(filename, checks, javaCheckVerifier, classpath);
+    scanFile(filename, checks, classpath);
   }
 
-  private static void scanFile(String filename, JavaFileScanner[] checks, JavaCheckVerifier javaCheckVerifier, Collection<File> classpath) {
+  private void scanFile(String filename, JavaFileScanner[] checks, Collection<File> classpath) {
     List<JavaFileScanner> visitors = new ArrayList<>(Arrays.asList(checks));
-    visitors.add(javaCheckVerifier);
+    visitors.add(expectations.parser());
     VisitorsBridgeForTests visitorsBridge = new VisitorsBridgeForTests(visitors, Lists.newArrayList(classpath), null);
     JavaAstScanner.scanSingleFileForTests(new File(filename), visitorsBridge);
     VisitorsBridgeForTests.TestJavaFileScannerContext testJavaFileScannerContext = visitorsBridge.lastCreatedTestContext();
-    checkIssues(testJavaFileScannerContext.getIssues(), javaCheckVerifier);
+    checkIssues(testJavaFileScannerContext.getIssues());
   }
 
-  @Override
-  public List<Tree.Kind> nodesToVisit() {
-    return ImmutableList.of(Tree.Kind.TRIVIA);
-  }
-
-  @Override
-  public void visitTrivia(SyntaxTrivia syntaxTrivia) {
-    collectExpectedIssues(syntaxTrivia.comment(), syntaxTrivia.startLine());
-  }
-
-  private void collectExpectedIssues(String comment, int line) {
-    if (comment.startsWith(TRIGGER)) {
-      String cleanedComment = StringUtils.remove(comment, TRIGGER);
-
-      EnumMap<IssueAttribute, String> attr = new EnumMap<>(IssueAttribute.class);
-      String expectedMessage = StringUtils.substringBetween(cleanedComment, "{{", "}}");
-      if (StringUtils.isNotEmpty(expectedMessage)) {
-        attr.put(IssueAttribute.MESSAGE, expectedMessage);
-      }
-      int expectedLine = line;
-      String attributesSubstr = extractAttributes(comment, attr);
-
-      cleanedComment = StringUtils.stripEnd(StringUtils.remove(StringUtils.remove(cleanedComment, "[[" + attributesSubstr + "]]"), "{{" + expectedMessage + "}}"), " \t");
-      if (StringUtils.startsWith(cleanedComment, "@")) {
-        final int lineAdjustment;
-        final char firstChar = cleanedComment.charAt(1);
-        final int endIndex = cleanedComment.indexOf(' ');
-        if (endIndex == -1) {
-          lineAdjustment = Integer.parseInt(cleanedComment.substring(2));
-        } else {
-          lineAdjustment = Integer.parseInt(cleanedComment.substring(2, endIndex));
-        }
-        if (firstChar == '+') {
-          expectedLine += lineAdjustment;
-        } else if (firstChar == '-') {
-          expectedLine -= lineAdjustment;
-        } else {
-          Fail.fail("Use only '@+N' or '@-N' to shifts messages.");
-        }
-      }
-      updateEndLine(expectedLine, attr);
-      expected.put(expectedLine, attr);
-    }
-  }
-
-  private static void updateEndLine(int expectedLine, EnumMap<IssueAttribute, String> attr) {
-    if (attr.containsKey(IssueAttribute.END_LINE)) {
-      String endLineStr = attr.get(IssueAttribute.END_LINE);
-      if (endLineStr.startsWith("+")) {
-        int endLine = Integer.parseInt(endLineStr);
-        attr.put(IssueAttribute.END_LINE, Integer.toString(expectedLine + endLine));
-      } else {
-        Fail.fail("endLine attribute should be relative to the line and must be +N with N integer");
-      }
-    }
-  }
-
-  private static String extractAttributes(String comment, Map<IssueAttribute, String> attr) {
-    String attributesSubstr = StringUtils.substringBetween(comment, "[[", "]]");
-    if (!StringUtils.isEmpty(attributesSubstr)) {
-      Iterable<String> attributes = Splitter.on(";").split(attributesSubstr);
-      for (String attribute : attributes) {
-        String[] split = StringUtils.split(attribute, '=');
-        if (split.length == 2 && ATTRIBUTE_MAP.containsKey(split[0])) {
-          attr.put(ATTRIBUTE_MAP.get(split[0]), split[1]);
-        } else {
-          Fail.fail("// Noncompliant attributes not valid: " + attributesSubstr);
-        }
-      }
-    }
-    return attributesSubstr;
-  }
-
-  private static void checkIssues(Set<AnalyzerMessage> issues, JavaCheckVerifier javaCheckVerifier) {
-    if (javaCheckVerifier.expectNoIssues) {
-      assertNoIssues(javaCheckVerifier.expected, issues);
-    } else if (StringUtils.isNotEmpty(javaCheckVerifier.expectFileIssue)) {
-      assertSingleIssue(javaCheckVerifier.expectFileIssueOnline, javaCheckVerifier.expectFileIssue, issues);
+  private void checkIssues(Set<AnalyzerMessage> issues) {
+    if (expectations.expectNoIssues) {
+      assertNoIssues(expectations.expected, issues);
+    } else if (StringUtils.isNotEmpty(expectations.expectFileIssue)) {
+      assertSingleIssue(expectations.expectFileIssueOnLine, expectations.expectFileIssue, issues);
     } else {
-      assertMultipleIssue(javaCheckVerifier.expected, issues);
+      assertMultipleIssue(expectations, expectations.expected, issues);
     }
   }
 
-  private static void assertMultipleIssue(Multimap<Integer, Map<IssueAttribute, String>> expected, Set<AnalyzerMessage> issues) throws AssertionError {
+  private static void assertMultipleIssue(Expectations expectations, Multimap<Integer, Map<Expectations.IssueAttribute, String>> expected,
+    Set<AnalyzerMessage> issues) throws AssertionError {
     Preconditions.checkState(!issues.isEmpty(), "At least one issue expected");
     List<Integer> unexpectedLines = Lists.newLinkedList();
     for (AnalyzerMessage issue : issues) {
-      validateIssue(expected, unexpectedLines, issue);
+      validateIssue(expectations, expected, unexpectedLines, issue);
     }
     if (!expected.isEmpty() || !unexpectedLines.isEmpty()) {
       Collections.sort(unexpectedLines);
       String expectedMsg = !expected.isEmpty() ? ("Expected " + expected) : "";
       String unexpectedMsg = !unexpectedLines.isEmpty() ? ((expectedMsg.isEmpty() ? "" : ", ") + "Unexpected at " + unexpectedLines) : "";
-      Fail.fail(expectedMsg + unexpectedMsg);
+      fail(expectedMsg + unexpectedMsg);
     }
   }
 
-  private static void validateIssue(Multimap<Integer, Map<IssueAttribute, String>> expected, List<Integer> unexpectedLines, AnalyzerMessage issue) {
+  private static void validateIssue(Expectations expectations, Multimap<Integer, Map<Expectations.IssueAttribute, String>> expected,
+    List<Integer> unexpectedLines, AnalyzerMessage issue) {
     int line = issue.getLine();
     if (expected.containsKey(line)) {
-      Map<IssueAttribute, String> attrs = Iterables.getLast(expected.get(line));
-      assertEquals(issue, attrs, IssueAttribute.MESSAGE);
-      Double cost = issue.getCost();
-      if (cost != null) {
-        assertEquals(Integer.toString(cost.intValue()), attrs, IssueAttribute.EFFORT_TO_FIX);
-      }
-      validateAnalyzerMessage(attrs, issue);
+      Map<Expectations.IssueAttribute, String> attrs = Iterables.getLast(expected.get(line));
+      assertAttributeMatch(issue, attrs, MESSAGE);
+      validateAnalyzerMessageAttributes(expectations, attrs, issue);
       expected.remove(line, attrs);
     } else {
       unexpectedLines.add(line);
     }
   }
 
-  private static void validateAnalyzerMessage(Map<IssueAttribute, String> attrs, AnalyzerMessage analyzerMessage) {
+  private static void validateAnalyzerMessageAttributes(Expectations expectations, Map<Expectations.IssueAttribute, String> attrs,
+    AnalyzerMessage analyzerMessage) {
     Double effortToFix = analyzerMessage.getCost();
     if (effortToFix != null) {
-      assertEquals(Integer.toString(effortToFix.intValue()), attrs, IssueAttribute.EFFORT_TO_FIX);
+      assertAttributeMatch(Integer.toString(effortToFix.intValue()), attrs, EFFORT_TO_FIX);
     }
-    AnalyzerMessage.TextSpan textSpan = analyzerMessage.primaryLocation();
-    assertEquals(normalizeColumn(textSpan.startCharacter), attrs, IssueAttribute.START_COLUMN);
-    assertEquals(Integer.toString(textSpan.endLine), attrs, IssueAttribute.END_LINE);
-    assertEquals(normalizeColumn(textSpan.endCharacter), attrs, IssueAttribute.END_COLUMN);
-    if (attrs.containsKey(IssueAttribute.SECONDARY_LOCATIONS)) {
-      List<AnalyzerMessage> secondaryLocations = analyzerMessage.flows.stream().map(l -> l.isEmpty() ? null:l.get(0)).filter(Objects::nonNull).collect(Collectors.toList());
-      Multiset<String> actualLines = HashMultiset.create();
-      actualLines.addAll(secondaryLocations.stream().map(secondaryLocation -> Integer.toString(secondaryLocation.getLine())).collect(Collectors.toList()));
-      List<String> expected = Lists.newArrayList(Splitter.on(",").omitEmptyStrings().trimResults().split(attrs.get(IssueAttribute.SECONDARY_LOCATIONS)));
-      List<String> unexpected = new ArrayList<>();
-      for (String actualLine : actualLines) {
-        if (expected.contains(actualLine)) {
-          expected.remove(actualLine);
-        } else {
-          unexpected.add(actualLine);
-        }
+    validateLocation(attrs, analyzerMessage.primaryLocation());
+    if (attrs.containsKey(SECONDARY_LOCATIONS)) {
+      List<AnalyzerMessage> actual = analyzerMessage.flows.stream().map(l -> l.isEmpty() ? null : l.get(0)).filter(Objects::nonNull).collect(Collectors.toList());
+      ArrayList<String> expected = Lists.newArrayList(Splitter.on(",").omitEmptyStrings().trimResults().split(attrs.get(SECONDARY_LOCATIONS)));
+      validateSecondaryLocations(actual, expected);
+    }
+    if (attrs.containsKey(FLOWS)) {
+      validateFlows(analyzerMessage.flows, expectations);
+    }
+  }
+
+  private static void validateLocation(Map<Expectations.IssueAttribute, String> attrs, AnalyzerMessage.TextSpan textSpan) {
+    assertAttributeMatch(normalizeColumn(textSpan.startCharacter), attrs, START_COLUMN);
+    assertAttributeMatch(Integer.toString(textSpan.endLine), attrs, END_LINE);
+    assertAttributeMatch(normalizeColumn(textSpan.endCharacter), attrs, END_COLUMN);
+  }
+
+  private static void validateFlows(List<List<AnalyzerMessage>> actual, Expectations expectations) {
+    Set<String> foundFlowIds = new HashSet<>();
+    Map<Boolean, List<List<AnalyzerMessage>>> partitionedFlows = actual.stream()
+      .collect(partitioningBy(f -> expectations.containFlow(f, foundFlowIds)));
+
+    List<List<AnalyzerMessage>> foundFlows = partitionedFlows.get(true);
+    List<List<AnalyzerMessage>> unexpectedFlows = partitionedFlows.get(false);
+    Sets.SetView<String> missingFlows = expectations.missingFlows(foundFlowIds);
+    StringBuilder failMsg = new StringBuilder();
+    if (!unexpectedFlows.isEmpty()) {
+      failMsg.append(unexpectedFlows.stream().map(JavaCheckVerifier::flowToString).collect(joining("\n", "Unexpected flows: ", ". ")));
+    }
+    if (!missingFlows.isEmpty()) {
+      failMsg.append(missingFlows.stream().collect(joining(",","Missing flows: ", ".")));
+    }
+    if (!missingFlows.isEmpty() || !unexpectedFlows.isEmpty()) {
+      fail(failMsg.toString());
+    }
+  }
+
+  private static String flowToString(List<AnalyzerMessage> flow) {
+    return flow.stream().map(m -> String.valueOf(m.getLine())).collect(joining(",","[","]"));
+  }
+
+  private static void validateSecondaryLocations(List<AnalyzerMessage> actual, List<String> expected) {
+    Multiset<String> actualLines = HashMultiset.create();
+    actualLines.addAll(actual.stream().map(secondaryLocation -> Integer.toString(secondaryLocation.getLine())).collect(Collectors.toList()));
+    List<String> unexpected = new ArrayList<>();
+    for (String actualLine : actualLines) {
+      if (expected.contains(actualLine)) {
+        expected.remove(actualLine);
+      } else {
+        unexpected.add(actualLine);
       }
-      if (!expected.isEmpty() || !unexpected.isEmpty()) {
-        Fail.fail("Secondary locations: expected: " + expected + " unexpected:" + unexpected);
-      }
+    }
+    if (!expected.isEmpty() || !unexpected.isEmpty()) {
+      fail("Secondary locations: expected: " + expected + " unexpected:" + unexpected);
     }
   }
 
@@ -350,13 +295,13 @@ public class JavaCheckVerifier extends SubscriptionVisitor {
     return Integer.toString(startCharacter + 1);
   }
 
-  private static void assertEquals(String value, Map<IssueAttribute, String> attributes, IssueAttribute attribute) {
+  private static void assertAttributeMatch(String value, Map<Expectations.IssueAttribute, String> attributes, Expectations.IssueAttribute attribute) {
     if (attributes.containsKey(attribute)) {
       assertThat(value).as("attribute mismatch for " + attribute + ": " + attributes).isEqualTo(attributes.get(attribute));
     }
   }
 
-  private static void assertEquals(AnalyzerMessage issue, Map<IssueAttribute, String> attributes, IssueAttribute attribute) {
+  private static void assertAttributeMatch(AnalyzerMessage issue, Map<Expectations.IssueAttribute, String> attributes, Expectations.IssueAttribute attribute) {
     if (attributes.containsKey(attribute)) {
       assertThat(issue.getMessage()).as("line " + issue.getLine() + " attribute mismatch for " + attribute + ": " + attributes).isEqualTo(attributes.get(attribute));
     }
@@ -369,7 +314,7 @@ public class JavaCheckVerifier extends SubscriptionVisitor {
     assertThat(issue.getMessage()).isEqualTo(expectFileIssue);
   }
 
-  private static void assertNoIssues(Multimap<Integer, Map<IssueAttribute, String>> expected, Set<AnalyzerMessage> issues) {
+  private static void assertNoIssues(Multimap<Integer, Map<Expectations.IssueAttribute, String>> expected, Set<AnalyzerMessage> issues) {
     assertThat(issues).overridingErrorMessage("No issues expected but got: " + issues).isEmpty();
     // make sure we do not copy&paste verifyNoIssue call when we intend to call verify
     assertThat(expected.isEmpty()).overridingErrorMessage("The file should not declare noncompliants when no issues are expected").isTrue();

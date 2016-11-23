@@ -645,6 +645,11 @@ public class JavaSymbol implements Symbol {
     public boolean isParametrized() {
       return !typeVariableTypes.isEmpty();
     }
+
+    @Override
+    public String toString() {
+      return String.format("%s#%s()", owner().name(), name());
+    }
   }
 
   /**

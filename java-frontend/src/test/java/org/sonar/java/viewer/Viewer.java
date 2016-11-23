@@ -111,6 +111,7 @@ public class Viewer extends Application {
     SplitPane splitPane = new SplitPane();
     splitPane.getItems().addAll(verticalSplitPane, webView);
     webView.getEngine().load(Viewer.class.getResource("/viewer/viewer.html").toExternalForm());
+    webView.setContextMenuEnabled(false);
     primaryStage.setScene(new Scene(splitPane, 1200, 800));
     primaryStage.show();
 

@@ -39,9 +39,6 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.function.Function;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 import static java.util.stream.Collectors.toList;
 import static org.fest.assertions.Assertions.assertThat;
@@ -243,15 +240,23 @@ public class JavaCheckVerifierTest {
   public void verify_flows() {
     FakeVisitor fakeVisitor = new FakeVisitor();
     AnalyzerMessageFactory amf = new AnalyzerMessageFactory(fakeVisitor);
-    AnalyzerMessage issue = amf.message(11, "NullPointerException might be thrown as 'b' is nullable here", 5, 15);
+
+    AnalyzerMessage issue = amf.message("NullPointerException might be thrown as 'b' is nullable here", 11, 5, 15);
     List<AnalyzerMessage> npe1Flow = ImmutableList.of(
-      amf.message(9, "a is assigned to b here", 7, 12),
-      amf.message(3, "a is assigned null here", 12, 20));
+      amf.message("a is assigned to null here", 3, 12, 20),
+      amf.message("a is assigned to b here", 9, 7, 12));
     issue.flows.add(npe1Flow);
     List<AnalyzerMessage> npe2Flow = ImmutableList.of(
-      amf.message(7, "b is assigned to null here", 7, 15));
+      amf.message("b is assigned to null here", 7, 7, 15));
     issue.flows.add(npe2Flow);
-    fakeVisitor = fakeVisitor.withPreciseIssue(issue);
+    fakeVisitor.withPreciseIssue(issue);
+
+    AnalyzerMessage reass = amf.message(null, 18, 0, 0, 0);
+    ImmutableList<AnalyzerMessage> reassFlow = ImmutableList.of(
+      amf.message("msg", 15, 0, 0),
+      amf.message(null, 17, 0, 0));
+    reass.flows.add(reassFlow);
+    fakeVisitor.withPreciseIssue(reass);
     JavaCheckVerifier.verify("src/test/files/JavaCheckVerifierFlows.java", fakeVisitor);
   }
 
@@ -259,13 +264,13 @@ public class JavaCheckVerifierTest {
   public void verify_unexpected_flows() {
     FakeVisitor fakeVisitor = new FakeVisitor();
     AnalyzerMessageFactory amf = new AnalyzerMessageFactory(fakeVisitor);
-    AnalyzerMessage issue = amf.message(11, "NullPointerException might be thrown as 'b' is nullable here", 5, 15);
+    AnalyzerMessage issue = amf.message("NullPointerException might be thrown as 'b' is nullable here", 11, 5, 15);
     List<AnalyzerMessage> npe1Flow = ImmutableList.of(
-      amf.message(5, "a is assigned to b here", 7, 12),
-      amf.message(6, "a is assigned null here", 12, 20));
+      amf.message("a is assigned to b here", 5, 7, 12),
+      amf.message("a is assigned null here", 6, 12, 20));
     issue.flows.add(npe1Flow);
     List<AnalyzerMessage> npe2Flow = ImmutableList.of(
-      amf.message(7, "b is assigned to null here", 7, 15));
+      amf.message("b is assigned to null here", 7, 7, 15));
     issue.flows.add(npe2Flow);
     fakeVisitor = fakeVisitor.withPreciseIssue(issue);
     try {
@@ -279,15 +284,56 @@ public class JavaCheckVerifierTest {
   public void verify_missing_flows() {
     FakeVisitor fakeVisitor = new FakeVisitor();
     AnalyzerMessageFactory amf = new AnalyzerMessageFactory(fakeVisitor);
-    AnalyzerMessage issue = amf.message(11, "NullPointerException might be thrown as 'b' is nullable here", 5, 15);
+    AnalyzerMessage issue = amf.message("NullPointerException might be thrown as 'b' is nullable here", 11, 5, 15);
     List<AnalyzerMessage> npe2Flow = ImmutableList.of(
-      amf.message(7, "b is assigned to null here", 7, 15));
+      amf.message("b is assigned to null here", 7, 7, 15));
     issue.flows.add(npe2Flow);
     fakeVisitor = fakeVisitor.withPreciseIssue(issue);
     try {
       JavaCheckVerifier.verify("src/test/files/JavaCheckVerifierFlows.java", fakeVisitor);
     } catch (AssertionError e) {
       assertThat(e).hasMessage("Missing flows: npe1.");
+    }
+  }
+
+  @Test
+  public void verify_flow_messages() {
+    FakeVisitor fakeVisitor = new FakeVisitor();
+    AnalyzerMessageFactory amf = new AnalyzerMessageFactory(fakeVisitor);
+    AnalyzerMessage issue = amf.message("NullPointerException might be thrown as 'b' is nullable here", 11, 5, 15);
+    List<AnalyzerMessage> npe1Flow = ImmutableList.of(
+      amf.message("invalid 1", 3, 7, 12),
+      amf.message("invalid 2", 9, 12, 20));
+    issue.flows.add(npe1Flow);
+    List<AnalyzerMessage> npe2Flow = ImmutableList.of(
+      amf.message("b is assigned to null here", 7, 7, 15));
+    issue.flows.add(npe2Flow);
+    fakeVisitor = fakeVisitor.withPreciseIssue(issue);
+    try {
+      JavaCheckVerifier.verify("src/test/files/JavaCheckVerifierFlows.java", fakeVisitor);
+      Fail.fail();
+    } catch (AssertionError e) {
+      assertThat(e).hasMessage("[Expected messages in flow npe1] expected:<['[a is assigned to null here', 'a is assigned to b here]']> but was:<['[invalid 1', 'invalid 2]']>");
+    }
+  }
+
+  @Test
+  public void verify_flow_locations() {
+    FakeVisitor fakeVisitor = new FakeVisitor();
+    AnalyzerMessageFactory amf = new AnalyzerMessageFactory(fakeVisitor);
+    AnalyzerMessage issue = amf.message("NullPointerException might be thrown as 'b' is nullable here", 11, 5, 15);
+    List<AnalyzerMessage> npe1Flow = ImmutableList.of(
+      amf.message("a is assigned to null here", 3, 6, 11),
+      amf.message("a is assigned to b here", 9, 12, 20));
+    issue.flows.add(npe1Flow);
+    List<AnalyzerMessage> npe2Flow = ImmutableList.of(
+      amf.message("b is assigned to null here", 7, 7, 15));
+    issue.flows.add(npe2Flow);
+    fakeVisitor = fakeVisitor.withPreciseIssue(issue);
+    try {
+      JavaCheckVerifier.verify("src/test/files/JavaCheckVerifierFlows.java", fakeVisitor);
+    } catch (AssertionError e) {
+      assertThat(e).hasMessage("[attribute mismatch for START_COLUMN: {MESSAGE=a is assigned to null here, START_COLUMN=12, END_COLUMN=20}] expected:<[12]> but was:<[6]>");
     }
   }
 
@@ -299,12 +345,18 @@ public class JavaCheckVerifierTest {
       this.javaCheck = javaCheck;
     }
 
-    AnalyzerMessage message(int line, String msg, int sc, int ec) {
+    AnalyzerMessage message(String msg, int line, int sc, int ec) {
+      return message(msg, line, sc, line, ec);
+    }
+
+    AnalyzerMessage message(String msg, int line, int sc, int endLine, int ec) {
       return new AnalyzerMessage(javaCheck,
         FILE,
-        new AnalyzerMessage.TextSpan(line, sc, line, ec),
+        new AnalyzerMessage.TextSpan(line, sc, endLine, ec),
         msg, 0);
     }
+
+
   }
 
   private static class FakeVisitor extends IssuableSubscriptionVisitor {

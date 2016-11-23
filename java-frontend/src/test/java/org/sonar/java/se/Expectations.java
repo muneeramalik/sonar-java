@@ -19,7 +19,6 @@
  */
 package org.sonar.java.se;
 
-import com.google.common.base.MoreObjects;
 import com.google.common.base.Splitter;
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ImmutableList;
@@ -39,8 +38,10 @@ import java.util.Collection;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import static org.sonar.java.se.Expectations.IssueAttribute.EFFORT_TO_FIX;
 import static org.sonar.java.se.Expectations.IssueAttribute.END_COLUMN;
@@ -51,9 +52,6 @@ import static org.sonar.java.se.Expectations.IssueAttribute.SECONDARY_LOCATIONS;
 import static org.sonar.java.se.Expectations.IssueAttribute.START_COLUMN;
 
 class Expectations {
-
-  private static final String NONCOMPLIANT_COMMENT = "// Noncompliant";
-  private static final String FLOW_COMMENT = "// flow";
 
   private static final Map<String, IssueAttribute> ATTRIBUTE_MAP = ImmutableMap.<String, IssueAttribute>builder()
     .put("message", MESSAGE)
@@ -70,57 +68,100 @@ class Expectations {
 
 
   enum IssueAttribute {
-    MESSAGE,
-    START_COLUMN,
-    END_COLUMN,
-    END_LINE,
-    EFFORT_TO_FIX,
-    SECONDARY_LOCATIONS,
-    FLOWS
+    MESSAGE(Function.identity()),
+    START_COLUMN(Integer::valueOf),
+    END_COLUMN(Integer::valueOf),
+    END_LINE(LineRef::fromString, LineRef::toLine),
+    EFFORT_TO_FIX(Double::valueOf),
+    SECONDARY_LOCATIONS(multiValueAttribute(Integer::valueOf)),
+    FLOWS(multiValueAttribute(Function.identity()))
+    ;
+
+    private Function<String, ?> fromString;
+    Function<Object, Object> toValue = Function.identity();
+
+    IssueAttribute(Function<String, ?> fromString) {
+      this.fromString = fromString;
+    }
+
+    IssueAttribute(Function<String, ?> fromString, Function<Object, Object> toValue) {
+      this.fromString = fromString;
+      this.toValue = toValue;
+    }
+
+    static <T> Function<String, List<T>> multiValueAttribute(Function<String, T> convert) {
+      return (String input) -> Arrays.stream(input.split(",")).map(convert).collect(Collectors.toList());
+    }
+
+    <T> T get(Map<IssueAttribute, Object> values) {
+      Object rawValue = values.get(this);
+      return rawValue == null ? null : (T) toValue.apply(rawValue);
+    }
   }
 
-  static class FlowItem {
-    String id;
-    String msg;
-    AnalyzerMessage.TextSpan textSpan;
+  abstract static class LineRef {
+    abstract int getLine(int ref);
 
-    public FlowItem(String id, String msg, AnalyzerMessage.TextSpan textSpan) {
+    static LineRef fromString(String input) {
+      if (input.startsWith("+")) {
+        return new RelativeLineRef(Integer.valueOf(input));
+      } else {
+        return new AbsoluteLineRef(Integer.valueOf(input));
+      }
+    }
+
+    static int toLine(Object ref) {
+      return ((LineRef) ref).getLine(0);
+    }
+
+    static class AbsoluteLineRef extends LineRef {
+      final int line;
+
+      public AbsoluteLineRef(int line) {
+        this.line = line;
+      }
+
+      public int getLine(int ref) {
+        return line;
+      }
+    }
+
+    static class RelativeLineRef extends LineRef {
+      final int offset;
+
+      RelativeLineRef(int offset) {
+        this.offset = offset;
+      }
+
+      @Override int getLine(int ref) {
+        return ref + offset;
+      }
+    }
+  }
+
+  static class FlowComment {
+    final String id;
+    final int line;
+    final Map<IssueAttribute, Object> attributes = new EnumMap<>(IssueAttribute.class);
+
+    public FlowComment(String id, int line) {
       this.id = id;
-      this.msg = msg;
-      this.textSpan = textSpan;
+      this.line = line;
     }
 
-    @Override
-    public boolean equals(Object o) {
-      if (this == o)
-        return true;
-      if (o == null || getClass() != o.getClass())
-        return false;
-      FlowItem flowItem = (FlowItem) o;
-      return Objects.equals(id, flowItem.id) &&
-        Objects.equals(msg, flowItem.msg) &&
-        Objects.equals(textSpan, flowItem.textSpan);
-    }
-
-    @Override
-    public int hashCode() {
-      return Objects.hash(id, msg, textSpan);
+    <T> T get(IssueAttribute attribute) {
+      return (T) attribute.get(attributes);
     }
 
     @Override
     public String toString() {
-      return MoreObjects.toStringHelper(this)
-        .add("id", id)
-        .add("msg", msg)
-        .add("textSpan", textSpan)
-        .toString();
+      return String.format("%d: flow@%s %s", line, id, attributes.toString());
     }
   }
 
-  final Multimap<Integer, Map<IssueAttribute, String>> expected = ArrayListMultimap.create();
+  final Multimap<Integer, EnumMap<IssueAttribute, Object>> issues = ArrayListMultimap.create();
 
-  private final Multimap<Integer, AnalyzerMessage> issues = ArrayListMultimap.create();
-  private final Multimap<String, FlowItem> flows = ArrayListMultimap.create();
+  final Multimap<String, FlowComment> flows = ArrayListMultimap.create();
 
   final boolean expectNoIssues;
   final String expectFileIssue;
@@ -136,49 +177,16 @@ class Expectations {
     this.expectFileIssueOnLine = expectFileIssueOnLine;
   }
 
-  private static String extractAttributes(String comment, Map<IssueAttribute, String> attr) {
-    String attributesSubstr = StringUtils.substringBetween(comment, "[[", "]]");
-    if (!StringUtils.isEmpty(attributesSubstr)) {
-      Iterable<String> attributes = Splitter.on(";").split(attributesSubstr);
-      for (String attribute : attributes) {
-        String[] split = StringUtils.split(attribute, '=');
-        if (split.length == 2 && ATTRIBUTE_MAP.containsKey(split[0])) {
-          attr.put(ATTRIBUTE_MAP.get(split[0]), split[1]);
-        } else {
-          Fail.fail("// Noncompliant attributes not valid: " + attributesSubstr);
-        }
-      }
-    }
-    return attributesSubstr;
-  }
-
-  private static void updateEndLine(int expectedLine, EnumMap<IssueAttribute, String> attr) {
-    if (attr.containsKey(END_LINE)) {
-      String endLineStr = attr.get(END_LINE);
-      if (endLineStr.startsWith("+")) {
-        int endLine = Integer.parseInt(endLineStr);
-        attr.put(END_LINE, Integer.toString(expectedLine + endLine));
-      } else {
-        Fail.fail("endLine attribute should be relative to the line and must be +N with N integer");
-      }
-    }
-  }
-
-  boolean containFlow(List<AnalyzerMessage> flow, Set<String> foundFlowIds) {
+  Optional<String> containFlow(List<AnalyzerMessage> flow) {
     // TODO make this faster by precomputing lines of expected flows
     int[] actualLines = flow.stream().mapToInt(AnalyzerMessage::getLine).sorted().toArray();
-    for (Collection<FlowItem> expectedFlow : flows.asMap().values()) {
-      int[] flowLines = expectedFlow.stream().mapToInt(f -> f.textSpan.startLine).sorted().toArray();
+    for (Collection<FlowComment> expectedFlow : flows.asMap().values()) {
+      int[] flowLines = expectedFlow.stream().mapToInt(f -> f.line).sorted().toArray();
       if (Arrays.equals(actualLines, flowLines)) {
-        expectedFlow.stream().findFirst().ifPresent(f -> foundFlowIds.add(f.id));
-        return true;
+        return expectedFlow.stream().findFirst().map(f -> f.id);
       }
     }
-    return false;
-  }
-
-  int flowCount() {
-    return flows.asMap().size();
+    return Optional.empty();
   }
 
   Sets.SetView<String> missingFlows(Set<String> foundFlowIds) {
@@ -190,6 +198,9 @@ class Expectations {
   }
 
   private class Parser extends IssuableSubscriptionVisitor {
+    private static final String NONCOMPLIANT_COMMENT = "// Noncompliant";
+    private static final String FLOW_COMMENT = "// flow";
+
     @Override
     public List<Tree.Kind> nodesToVisit() {
       return ImmutableList.of(Tree.Kind.TRIVIA);
@@ -212,17 +223,19 @@ class Expectations {
     private void parseFlow(String comment, int line) {
       int atIdx = comment.indexOf('@');
       int followingSpaceIdx = comment.indexOf(' ', atIdx);
-      String flowId = comment.substring(atIdx + 1, followingSpaceIdx);
-      // TODO parse msg and textspan
-      FlowItem flowItem = new FlowItem(flowId, "", new AnalyzerMessage.TextSpan(line, 0, line, 0));
-      flows.put(flowId, flowItem);
+      String flowId = comment.substring(atIdx + 1, followingSpaceIdx == -1 ? comment.length() : followingSpaceIdx);
+      FlowComment flowComment = new FlowComment(flowId, line);
+      String message = extractMessage(comment);
+      flowComment.attributes.put(MESSAGE, message);
+      extractAttributes(comment, flowComment.attributes);
+      flows.put(flowId, flowComment);
     }
 
     private void parseIssue(String comment, int line) {
       String cleanedComment = StringUtils.remove(comment, NONCOMPLIANT_COMMENT);
 
-      EnumMap<IssueAttribute, String> attr = new EnumMap<>(IssueAttribute.class);
-      String expectedMessage = StringUtils.substringBetween(cleanedComment, "{{", "}}");
+      EnumMap<IssueAttribute, Object> attr = new EnumMap<>(IssueAttribute.class);
+      String expectedMessage = extractMessage(cleanedComment);
       if (StringUtils.isNotEmpty(expectedMessage)) {
         attr.put(MESSAGE, expectedMessage);
       }
@@ -230,6 +243,16 @@ class Expectations {
       String attributesSubstr = extractAttributes(comment, attr);
 
       cleanedComment = StringUtils.stripEnd(StringUtils.remove(StringUtils.remove(cleanedComment, "[[" + attributesSubstr + "]]"), "{{" + expectedMessage + "}}"), " \t");
+      expectedLine = parseLineShifting(cleanedComment, expectedLine);
+      updateEndLine(expectedLine, attr);
+      issues.put(expectedLine, attr);
+    }
+
+    private String extractMessage(String cleanedComment) {
+      return StringUtils.substringBetween(cleanedComment, "{{", "}}");
+    }
+
+    private int parseLineShifting(String cleanedComment, int expectedLine) {
       if (StringUtils.startsWith(cleanedComment, "@")) {
         final int lineAdjustment;
         final char firstChar = cleanedComment.charAt(1);
@@ -247,8 +270,37 @@ class Expectations {
           Fail.fail("Use only '@+N' or '@-N' to shifts messages.");
         }
       }
-      updateEndLine(expectedLine, attr);
-      expected.put(expectedLine, attr);
+      return expectedLine;
+    }
+
+    private String extractAttributes(String comment, Map<IssueAttribute, Object> attr) {
+      String attributesSubstr = StringUtils.substringBetween(comment, "[[", "]]");
+      if (StringUtils.isEmpty(attributesSubstr)) {
+        return attributesSubstr;
+      }
+      Iterable<String> attributes = Splitter.on(";").split(attributesSubstr);
+      for (String attribute : attributes) {
+        String[] split = StringUtils.split(attribute, '=');
+        if (split.length == 2 && ATTRIBUTE_MAP.containsKey(split[0])) {
+          IssueAttribute issueAttribute = ATTRIBUTE_MAP.get(split[0]);
+          Object value = issueAttribute.fromString.apply(split[1]);
+          attr.put(issueAttribute, value);
+        } else {
+          Fail.fail("// Noncompliant attributes not valid: " + attributesSubstr);
+        }
+      }
+      return attributesSubstr;
+    }
+
+    private void updateEndLine(int expectedLine, EnumMap<IssueAttribute, Object> attr) {
+      if (attr.containsKey(END_LINE)) {
+        LineRef endLine = (LineRef) attr.get(END_LINE);
+        if (endLine instanceof LineRef.RelativeLineRef) {
+          attr.put(END_LINE, new LineRef.AbsoluteLineRef(endLine.getLine(expectedLine)));
+        } else {
+          Fail.fail("endLine attribute should be relative to the line and must be +N with N integer");
+        }
+      }
     }
   }
 

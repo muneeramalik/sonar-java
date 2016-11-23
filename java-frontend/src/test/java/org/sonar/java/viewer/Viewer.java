@@ -23,10 +23,10 @@ import javafx.animation.Animation;
 import javafx.animation.KeyFrame;
 import javafx.animation.Timeline;
 import javafx.application.Application;
+import javafx.geometry.Orientation;
 import javafx.scene.Scene;
 import javafx.scene.control.SplitPane;
 import javafx.scene.control.TextArea;
-import javafx.scene.layout.VBox;
 import javafx.scene.web.WebView;
 import javafx.stage.Stage;
 import javafx.util.Duration;
@@ -51,7 +51,6 @@ public class Viewer extends Application {
 
   private static final String DEFAULT_SOURCE_CODE = "/viewer/default.java";
 
-  private final VBox verticalLayout = new VBox();
   private final CodeArea codeArea = new CodeArea();
   final TextArea textArea = new TextArea();
   final WebView webView = new WebView();
@@ -105,8 +104,12 @@ public class Viewer extends Application {
     primaryStage.setTitle("SonarQube Java Analyzer - Viewer");
     codeArea.insertText(0, defaultFileContent());
 
+    SplitPane verticalSplitPane = new SplitPane();
+    verticalSplitPane.setOrientation(Orientation.VERTICAL);
+    verticalSplitPane.getItems().addAll(codeArea, textArea);
+
     SplitPane splitPane = new SplitPane();
-    splitPane.getItems().addAll(verticalLayout, webView);
+    splitPane.getItems().addAll(verticalSplitPane, webView);
     webView.getEngine().load(Viewer.class.getResource("/viewer/viewer.html").toExternalForm());
     primaryStage.setScene(new Scene(splitPane, 1200, 800));
     primaryStage.show();
@@ -125,14 +128,13 @@ public class Viewer extends Application {
   }
 
   protected void analyse(String source){
-//    new CFGViewer(this).analyse(source);
+    // new CFGViewer(this).analyse(source);
     new EGViewer(this).analyse(source);
 //    new TreeViewer(this).analyse(source);
   }
 
 
   private void setupLayout() {
-    codeArea.setStyle("-fx-min-height: 400px;");
     codeArea.getStylesheets().add(Viewer.class.getResource("/viewer/java-keywords.css").toExternalForm());
     codeArea.setParagraphGraphicFactory(LineNumberFactory.get(codeArea));
     codeArea.richChanges()
@@ -141,9 +143,7 @@ public class Viewer extends Application {
         codeArea.setStyleSpans(0, computeHighlighting(codeArea.getText()));
       });
 
-    textArea.setStyle("-fx-min-height: 390px; -fx-font-family: monospace;");
-
-    verticalLayout.getChildren().addAll(codeArea, textArea);
+    textArea.setStyle("-fx-font-family: monospace;");
   }
 
   private static StyleSpans<Collection<String>> computeHighlighting(String text) {
